@@ -160,57 +160,54 @@ def load_barrios_merged():
     file_id = "1x5LfDYpYlpgeYsyIKmuCdJGruKvULyC8"
     url = f"https://drive.google.com/uc?id={file_id}"
 
-    # Temporary file path for download
     tmp_path = os.path.join(tempfile.gettempdir(), "barrios_nacional.gpkg")
 
-    # Download if missing or incomplete
+    # --- Download if needed ---
     if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) < 1e6:
         print("⬇️ Downloading barrios_nacional.gpkg from Google Drive...")
-        try:
-            gdown.download(url, tmp_path, quiet=False)
-        except Exception as e:
-            print(f"⚠️ Error downloading from Google Drive: {e}")
+        gdown.download(url, tmp_path, quiet=False)
 
-    # --- Try to read the geopackage ---
-    try:
-        print("📥 Reading barrios_nacional.gpkg...")
-        gdf = gpd.read_file(tmp_path)
-        print("🔍 Barrios columns:", gdf.columns.tolist())
-        print("🧮 Row count:", len(gdf))
-        print("📏 File size (KB):", os.path.getsize(tmp_path) / 1024)
-    except Exception as e:
-        print(f"❌ Failed to read barrios_nacional.gpkg: {e}")
-        return None, None, e
+    # --- Load the geopackage ---
+    print("📥 Reading barrios_nacional.gpkg...")
+    gdf = gpd.read_file(tmp_path)
 
-    # --- Merge with Valor_Barrios.xlsx ---
-    try:
-        valores = pd.read_excel("Valor_Barrios.xlsx")
-        valores.columns = [c.strip().lower() for c in valores.columns]
+    print("🔍 Barrios columns:", gdf.columns.tolist())
+    print("🧮 Row count:", len(gdf))
 
-        # Normalize barrio_id column name
-        if "barrio_id" not in valores.columns:
-            for cand in ["barrioid", "id_barrio", "barrio", "barrio_id "]:
-                if cand in valores.columns:
-                    valores = valores.rename(columns={cand: "barrio_id"})
-                    break
+    # --- Load Excel values ---
+    valores = pd.read_excel("Valor_Barrios.xlsx")
+    valores.columns = [c.strip().lower() for c in valores.columns]
+    print("📗 Valor_Barrios columns:", valores.columns.tolist())
 
-        # Normalize value column
-        if "puntaje_absoluto" not in valores.columns:
-            for cand in ["valor", "puntaje", "score"]:
-                if cand in valores.columns:
-                    valores = valores.rename(columns={cand: "puntaje_absoluto"})
-                    break
+    # --- Detect and normalize join keys ---
+    barrio_col_gdf = None
+    for cand in ["barrio_id", "barrioid", "id_barrio", "barrio"]:
+        if cand in gdf.columns:
+            barrio_col_gdf = cand
+            break
+    if not barrio_col_gdf:
+        print("⚠️ Could not find barrio column in GeoPackage.")
+        barrio_col_gdf = gdf.columns[0]
 
-        merged = gdf.merge(valores, on="barrio_id", how="left")
+    barrio_col_val = None
+    for cand in ["barrio_id", "barrioid", "id_barrio", "barrio"]:
+        if cand in valores.columns:
+            barrio_col_val = cand
+            break
+    if not barrio_col_val:
+        print("⚠️ Could not find barrio column in Valor_Barrios.xlsx.")
+        barrio_col_val = valores.columns[0]
 
-        # Create spatial index if possible
-        sidx = merged.sindex if hasattr(merged, "sindex") else None
+    print(f"🔗 Joining on gdf['{barrio_col_gdf}'] and valores['{barrio_col_val}'].")
 
-        return merged, sidx, None
+    # --- Merge ---
+    merged = gdf.merge(valores, left_on=barrio_col_gdf, right_on=barrio_col_val, how="left")
 
-    except Exception as e:
-        print(f"❌ Error merging data: {e}")
-        return gdf, None, e
+    print("✅ Merge complete. Rows:", len(merged))
+    print("🧩 Sample merged columns:", merged.columns.tolist()[:10])
+
+    sidx = merged.sindex if hasattr(merged, "sindex") else None
+    return merged, sidx, None
 
 
 

@@ -145,56 +145,45 @@ def load_daystart(path: str = DAYSTART_CSV):
 # Barrios y valores
 # ---------------------------------------------------------------------------
 def load_barrios_merged():
-    import gdown
-    import tempfile
+    """
+    Loads the merged barrios dataset, downloading it from Google Drive if needed.
+    """
+    file_id = "1x5LfDYpYlpgeYsyIKmuCdJGruKvULyC8"
+    url = f"https://drive.google.com/uc?id={file_id}"
 
-    DRIVE_ID = "1x5LfDYpYlpgeYsyIKmuCdJGruKvULyC8"
-    DRIVE_URL = f"https://drive.google.com/uc?id={DRIVE_ID}"
+    # download to temp if missing
+    tmp_path = os.path.join(tempfile.gettempdir(), "barrios_nacional.gpkg")
 
-    try:
-        # Try local first
-        if os.path.exists(BARRIOS_FILE):
-            gdf = gpd.read_file(BARRIOS_FILE)
-        else:
-            print("⬇️ Downloading barrios_nacional.gpkg from Google Drive...")
-            tmp_path = os.path.join(tempfile.gettempdir(), "barrios_nacional.gpkg")
-            gdown.download(DRIVE_URL, tmp_path, quiet=False)
-            gdf = gpd.read_file(tmp_path)
+    if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) < 1e6:
+        print("⬇️ Downloading barrios_nacional.gpkg from Google Drive...")
+        gdown.download(url, tmp_path, quiet=False)
 
-        # Fix column names
-        if "barrio" in gdf.columns and "barrio_id" not in gdf.columns:
-            gdf = gdf.rename(columns={"barrio": "barrio_id"})
+    # read the geopackage
+    gdf = gpd.read_file(tmp_path)
 
-        # Load Excel values
-        valores = pd.read_excel(VALORES_EXCEL)
-        valores.columns = [c.strip().lower() for c in valores.columns]
-        if "barrio_id" not in valores.columns:
-            for cand in ["barrioid", "id_barrio", "barrio", "barrio_id "]:
-                if cand in valores.columns:
-                    valores = valores.rename(columns={cand: "barrio_id"})
-                    break
-        if "puntaje_absoluto" not in valores.columns:
-            for cand in ["valor", "puntaje", "score"]:
-                if cand in valores.columns:
-                    valores = valores.rename(columns={cand: "puntaje_absoluto"})
-                    break
+    # merge with valores
+    valores = pd.read_excel("Valor_Barrios.xlsx")
+    valores.columns = [c.strip().lower() for c in valores.columns]
 
-        # Check structure
-        if "barrio_id" not in valores.columns or "puntaje_absoluto" not in valores.columns:
-            return None, None, "Excel debe tener 'barrio_id' y 'puntaje_absoluto'."
+    # normalize column names
+    if "barrio_id" not in valores.columns:
+        for cand in ["barrioid", "id_barrio", "barrio", "barrio_id "]:
+            if cand in valores.columns:
+                valores = valores.rename(columns={cand: "barrio_id"})
+                break
 
-        # Merge
-        gdf["barrio_id"] = gdf["barrio_id"].astype(str).str.strip().str.lower()
-        valores["barrio_id"] = valores["barrio_id"].astype(str).str.strip().str.lower()
-        merged = gdf.merge(valores, on="barrio_id", how="left")
+    if "puntaje_absoluto" not in valores.columns:
+        for cand in ["valor", "puntaje", "score"]:
+            if cand in valores.columns:
+                valores = valores.rename(columns={cand: "puntaje_absoluto"})
+                break
 
-        sidx = merged.sindex if hasattr(merged, "sindex") else None
-        print("✅ Barrios data loaded successfully.")
-        return merged, sidx, None
+    merged = gdf.merge(valores, on="barrio_id", how="left")
 
-    except Exception as e:
-        return None, None, f"No se pudo leer ni desde Drive ni localmente: {e}"
+    # create spatial index if possible
+    sidx = merged.sindex if hasattr(merged, "sindex") else None
 
+    return merged, sidx, None
 
 
 

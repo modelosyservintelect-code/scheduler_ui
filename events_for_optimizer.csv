@@ -1,0 +1,2 @@
+event_id,name,earliest_start,latest_start,duration_min,lat,lon,location_score,demo_18_29,demo_30_44,demo_45_64,demo_65p,reach,must_visit,barrio_id,barrio_valor_base,scale,value
+1,test,2025-10-05 09:00:00,2025-10-05 18:00:00,60,-33.4469119561203,-70.61771392822267,,,,,,,False,providencia | cluster | c8,5270.0,100,527000.0

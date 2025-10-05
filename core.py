@@ -4,6 +4,10 @@ import math
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+import tempfile
+import re
+
+
 
 # Geoespacial (opcional)
 try:
@@ -141,74 +145,58 @@ def load_daystart(path: str = DAYSTART_CSV):
 # Barrios y valores
 # ---------------------------------------------------------------------------
 def load_barrios_merged():
-    if gpd is None or Point is None:
-        return None, None, "Faltan dependencias de geopandas/shapely."
+    import gdown
+    import tempfile
 
-    import streamlit as st
+    DRIVE_ID = "1x5LfDYpYlpgeYsyIKmuCdJGruKvULyC8"
+    DRIVE_URL = f"https://drive.google.com/uc?id={DRIVE_ID}"
 
-    # -----------------------------------------------------------------------
-    # 🔹 Descarga automática del archivo .gpkg si no existe localmente
-    # -----------------------------------------------------------------------
-    BARRIOS_URL = "https://drive.google.com/uc?export=download&id=1x5LfDYpYlpgeYsyIKmuCdJGruKvULyC8"
-
-    if not os.path.exists(BARRIOS_FILE):
-        try:
-            import requests
-            with st.spinner("⏳ Descargando datos geoespaciales (barrios)..."):
-                r = requests.get(BARRIOS_URL, stream=True)
-                r.raise_for_status()
-                with open(BARRIOS_FILE, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        f.write(chunk)
-            st.success("✅ Descarga completada correctamente.")
-        except Exception as e:
-            st.error(f"❌ No se pudo descargar {BARRIOS_FILE}: {e}")
-            return None, None, f"No se pudo descargar {BARRIOS_FILE}: {e}"
-
-    # -----------------------------------------------------------------------
-    # 🔹 Leer archivo GeoPackage de barrios
-    # -----------------------------------------------------------------------
     try:
-        gdf = gpd.read_file(BARRIOS_FILE, layer=0)
+        # Try local first
+        if os.path.exists(BARRIOS_FILE):
+            gdf = gpd.read_file(BARRIOS_FILE)
+        else:
+            print("⬇️ Downloading barrios_nacional.gpkg from Google Drive...")
+            tmp_path = os.path.join(tempfile.gettempdir(), "barrios_nacional.gpkg")
+            gdown.download(DRIVE_URL, tmp_path, quiet=False)
+            gdf = gpd.read_file(tmp_path)
+
+        # Fix column names
         if "barrio" in gdf.columns and "barrio_id" not in gdf.columns:
             gdf = gdf.rename(columns={"barrio": "barrio_id"})
-    except Exception as e:
-        st.error(f"❌ No se pudo leer {BARRIOS_FILE}: {e}")
-        return None, None, f"No se pudo leer {BARRIOS_FILE}: {e}"
 
-    # -----------------------------------------------------------------------
-    # 🔹 Leer valores desde Excel
-    # -----------------------------------------------------------------------
-    try:
+        # Load Excel values
         valores = pd.read_excel(VALORES_EXCEL)
+        valores.columns = [c.strip().lower() for c in valores.columns]
+        if "barrio_id" not in valores.columns:
+            for cand in ["barrioid", "id_barrio", "barrio", "barrio_id "]:
+                if cand in valores.columns:
+                    valores = valores.rename(columns={cand: "barrio_id"})
+                    break
+        if "puntaje_absoluto" not in valores.columns:
+            for cand in ["valor", "puntaje", "score"]:
+                if cand in valores.columns:
+                    valores = valores.rename(columns={cand: "puntaje_absoluto"})
+                    break
+
+        # Check structure
+        if "barrio_id" not in valores.columns or "puntaje_absoluto" not in valores.columns:
+            return None, None, "Excel debe tener 'barrio_id' y 'puntaje_absoluto'."
+
+        # Merge
+        gdf["barrio_id"] = gdf["barrio_id"].astype(str).str.strip().str.lower()
+        valores["barrio_id"] = valores["barrio_id"].astype(str).str.strip().str.lower()
+        merged = gdf.merge(valores, on="barrio_id", how="left")
+
+        sidx = merged.sindex if hasattr(merged, "sindex") else None
+        print("✅ Barrios data loaded successfully.")
+        return merged, sidx, None
+
     except Exception as e:
-        st.error(f"❌ No se pudo leer {VALORES_EXCEL}: {e}")
-        return None, None, f"No se pudo leer {VALORES_EXCEL}: {e}"
+        return None, None, f"No se pudo leer ni desde Drive ni localmente: {e}"
 
-    # -----------------------------------------------------------------------
-    # 🔹 Limpieza y merge
-    # -----------------------------------------------------------------------
-    valores.columns = [c.strip().lower() for c in valores.columns]
-    if "barrio_id" not in valores.columns:
-        for cand in ["barrioid", "id_barrio", "barrio", "barrio_id "]:
-            if cand in valores.columns:
-                valores = valores.rename(columns={cand: "barrio_id"})
-                break
-    if "puntaje_absoluto" not in valores.columns:
-        for cand in ["valor", "puntaje", "score"]:
-            if cand in valores.columns:
-                valores = valores.rename(columns={cand: "puntaje_absoluto"})
-                break
-    if "barrio_id" not in valores.columns or "puntaje_absoluto" not in valores.columns:
-        st.error("❌ Excel debe tener columnas 'barrio_id' y 'puntaje_absoluto'.")
-        return None, None, "Excel debe tener 'barrio_id' y 'puntaje_absoluto'."
 
-    gdf["barrio_id"] = gdf["barrio_id"].astype(str).str.strip().str.lower()
-    valores["barrio_id"] = valores["barrio_id"].astype(str).str.strip().str.lower()
 
-    merged = gdf.merge(valores, on="barrio_id", how="left")
-    sidx = merged.sindex if hasattr(merged, "sindex") else None
-    return merged, sidx, None
 
 
 
@@ -216,21 +204,31 @@ BARRIOS_GDF, BARRIOS_SIDX, BARRIOS_ERR = load_barrios_merged()
 
 def lookup_barrio_y_valor(lat: float, lon: float):
     if BARRIOS_GDF is None or BARRIOS_ERR or BARRIOS_GDF.empty:
+        print("⚠️  No barrios data loaded:", BARRIOS_ERR)
         return "Desconocido", 0.0
+
+    print(f"🔍 Checking point ({lat}, {lon}) against {len(BARRIOS_GDF)} polygons")
     pt = Point(lon, lat)
+
     cand = BARRIOS_GDF
     if BARRIOS_SIDX is not None:
         cand_idx = list(BARRIOS_SIDX.intersection((pt.x, pt.y, pt.x, pt.y)))
+        print(f"Candidate polygons from spatial index: {len(cand_idx)}")
         if not cand_idx:
             return "Fuera de barrio", 0.0
         cand = BARRIOS_GDF.iloc[cand_idx]
+
     hit = cand[cand.contains(pt)]
+    print(f"Polygons containing point: {len(hit)}")
+
     if hit.empty:
         return "Fuera de barrio", 0.0
+
     h = hit.iloc[0]
     barrio_id = h.get("barrio_id", "Desconocido")
     base_val = float(h.get("puntaje_absoluto", 0.0))
     return barrio_id, base_val
+
 
 def valor_reponderado(base_val: float,
                       demo18: float, demo30: float, demo45: float, demo65: float,

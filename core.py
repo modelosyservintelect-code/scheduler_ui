@@ -149,43 +149,69 @@ def load_daystart(path: str = DAYSTART_CSV):
 def load_barrios_merged():
     """
     Loads the merged barrios dataset, downloading it from Google Drive if needed.
+    Works in both local and Streamlit Cloud environments.
     """
+    import os
+    import tempfile
+    import pandas as pd
+    import geopandas as gpd
+    import gdown
+
     file_id = "1x5LfDYpYlpgeYsyIKmuCdJGruKvULyC8"
     url = f"https://drive.google.com/uc?id={file_id}"
 
-    # download to temp if missing
+    # Temporary file path for download
     tmp_path = os.path.join(tempfile.gettempdir(), "barrios_nacional.gpkg")
 
+    # Download if missing or incomplete
     if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) < 1e6:
         print("⬇️ Downloading barrios_nacional.gpkg from Google Drive...")
-        gdown.download(url, tmp_path, quiet=False)
+        try:
+            gdown.download(url, tmp_path, quiet=False)
+        except Exception as e:
+            print(f"⚠️ Error downloading from Google Drive: {e}")
 
-    # read the geopackage
-    gdf = gpd.read_file(tmp_path)
+    # --- Try to read the geopackage ---
+    try:
+        print("📥 Reading barrios_nacional.gpkg...")
+        gdf = gpd.read_file(tmp_path)
+        print("🔍 Barrios columns:", gdf.columns.tolist())
+        print("🧮 Row count:", len(gdf))
+        print("📏 File size (KB):", os.path.getsize(tmp_path) / 1024)
+    except Exception as e:
+        print(f"❌ Failed to read barrios_nacional.gpkg: {e}")
+        return None, None, e
 
-    # merge with valores
-    valores = pd.read_excel("Valor_Barrios.xlsx")
-    valores.columns = [c.strip().lower() for c in valores.columns]
+    # --- Merge with Valor_Barrios.xlsx ---
+    try:
+        valores = pd.read_excel("Valor_Barrios.xlsx")
+        valores.columns = [c.strip().lower() for c in valores.columns]
 
-    # normalize column names
-    if "barrio_id" not in valores.columns:
-        for cand in ["barrioid", "id_barrio", "barrio", "barrio_id "]:
-            if cand in valores.columns:
-                valores = valores.rename(columns={cand: "barrio_id"})
-                break
+        # Normalize barrio_id column name
+        if "barrio_id" not in valores.columns:
+            for cand in ["barrioid", "id_barrio", "barrio", "barrio_id "]:
+                if cand in valores.columns:
+                    valores = valores.rename(columns={cand: "barrio_id"})
+                    break
 
-    if "puntaje_absoluto" not in valores.columns:
-        for cand in ["valor", "puntaje", "score"]:
-            if cand in valores.columns:
-                valores = valores.rename(columns={cand: "puntaje_absoluto"})
-                break
+        # Normalize value column
+        if "puntaje_absoluto" not in valores.columns:
+            for cand in ["valor", "puntaje", "score"]:
+                if cand in valores.columns:
+                    valores = valores.rename(columns={cand: "puntaje_absoluto"})
+                    break
 
-    merged = gdf.merge(valores, on="barrio_id", how="left")
+        merged = gdf.merge(valores, on="barrio_id", how="left")
 
-    # create spatial index if possible
-    sidx = merged.sindex if hasattr(merged, "sindex") else None
+        # Create spatial index if possible
+        sidx = merged.sindex if hasattr(merged, "sindex") else None
 
-    return merged, sidx, None
+        return merged, sidx, None
+
+    except Exception as e:
+        print(f"❌ Error merging data: {e}")
+        return gdf, None, e
+
 
 
 
